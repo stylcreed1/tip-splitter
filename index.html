@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tip Splitter</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.5rem; }
+  label { display: block; margin: 1rem 0 .25rem; font-weight: 600; }
+  input { font: inherit; padding: .4rem; border: 1px solid #aaa; border-radius: 4px; box-sizing: border-box; }
+  input.invalid { border-color: #c00; background: #fff0f0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: .35rem .25rem; }
+  td.num, th.num { text-align: right; }
+  td input { width: 100%; }
+  tfoot td { font-weight: 700; border-top: 2px solid #222; }
+  .warn { color: #c00; font-size: .85rem; min-height: 1.1rem; }
+  .hint { color: #666; margin-top: 1rem; }
+  button { font: inherit; padding: .4rem .8rem; cursor: pointer; }
+  .actions { margin-top: 1rem; display: flex; gap: .5rem; }
+</style>
+</head>
+<body>
+<h1>Tip Splitter</h1>
+
+<label for="pool">Tip pool ($)</label>
+<input id="pool" type="number" min="0" max="1000000000" step="0.01" inputmode="decimal">
+<div class="warn" id="pool-warn"></div>
+
+<table>
+  <thead>
+    <tr><th>Staff member</th><th>Hours worked</th><th class="num">Share</th><th class="num">% of hours</th><th></th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+  <tfoot>
+    <tr><td>Total</td><td id="total-hours"></td><td class="num" id="total-shares"></td><td></td><td></td></tr>
+  </tfoot>
+</table>
+<div class="hint" id="hint"></div>
+
+<div class="actions">
+  <button id="add" type="button">Add staff member</button>
+  <button id="new-shift" type="button">New shift</button>
+</div>
+
+<script src="split.js"></script>
+<script>
+(function () {
+  var STORAGE_KEY = 'tip-splitter-shift';
+  var INITIAL_ROWS = 3;
+
+  var poolInput = document.getElementById('pool');
+  var poolWarn = document.getElementById('pool-warn');
+  var rowsBody = document.getElementById('rows');
+  var totalHours = document.getElementById('total-hours');
+  var totalShares = document.getElementById('total-shares');
+  var hint = document.getElementById('hint');
+
+  var shift = load() || blankShift();
+
+  function blankShift() {
+    var rows = [];
+    for (var i = 0; i < INITIAL_ROWS; i++) rows.push({ name: '', hours: '' });
+    return { pool: '', rows: rows };
+  }
+
+  function load() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      if (saved && typeof saved.pool === 'string' && Array.isArray(saved.rows) && saved.rows.length > 0 && saved.rows.every(isRow)) return saved;
+    } catch (e) {}
+    return null;
+  }
+
+  function isRow(row) {
+    return row && typeof row.name === 'string' && typeof row.hours === 'string';
+  }
+
+  function save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(shift)); } catch (e) {}
+  }
+
+  function clearSaved() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  }
+
+  function money(cents) {
+    return '$' + (cents / 100).toFixed(2);
+  }
+
+  function isInvalid(value, max) {
+    if (value.trim() === '') return false;
+    var n = Number(value);
+    return !isFinite(n) || n < 0 || n > max;
+  }
+
+  function flag(input, invalid) {
+    input.classList.toggle('invalid', invalid);
+  }
+
+  function renderRows() {
+    rowsBody.innerHTML = '';
+    shift.rows.forEach(function (row, i) {
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><input type="text" class="name" placeholder="Staff ' + (i + 1) + '"></td>' +
+        '<td><input type="number" class="hours" min="0" max="100000" step="0.01" inputmode="decimal"></td>' +
+        '<td class="num share"></td><td class="num pct"></td>' +
+        '<td><button type="button" class="remove" aria-label="Remove staff member">x</button></td>';
+      var name = tr.querySelector('.name');
+      var hours = tr.querySelector('.hours');
+      name.value = row.name;
+      hours.value = row.hours;
+      name.addEventListener('input', function () { row.name = name.value; save(); });
+      hours.addEventListener('input', function () { row.hours = hours.value; save(); renderResults(); });
+      tr.querySelector('.remove').addEventListener('click', function () {
+        if (shift.rows.length === 1) return;
+        shift.rows.splice(i, 1);
+        save();
+        renderRows();
+      });
+      rowsBody.appendChild(tr);
+    });
+    renderResults();
+  }
+
+  function renderResults() {
+    poolWarn.textContent = isInvalid(shift.pool, 1e9) ? 'Enter an amount from 0 to 1,000,000,000; counted as $0.00.' : '';
+    flag(poolInput, isInvalid(shift.pool, 1e9));
+
+    var result = split(shift.pool, shift.rows);
+    var trs = rowsBody.children;
+    shift.rows.forEach(function (row, i) {
+      var tr = trs[i];
+      flag(tr.querySelector('.hours'), isInvalid(row.hours, 1e5));
+      tr.querySelector('.share').textContent = money(result.rows[i].shareCents);
+      tr.querySelector('.pct').textContent = result.rows[i].percent.toFixed(1) + '%';
+    });
+    totalHours.textContent = result.totalHours;
+    totalShares.textContent = money(result.totalShareCents);
+
+    var hasPool = Number(shift.pool) > 0;
+    hint.textContent = result.totalHours === 0 || !hasPool ? 'Enter hours to see the split' : '';
+  }
+
+  poolInput.addEventListener('input', function () { shift.pool = poolInput.value; save(); renderResults(); });
+  document.getElementById('add').addEventListener('click', function () {
+    shift.rows.push({ name: '', hours: '' });
+    save();
+    renderRows();
+  });
+  document.getElementById('new-shift').addEventListener('click', function () {
+    shift = blankShift();
+    clearSaved();
+    poolInput.value = '';
+    renderRows();
+  });
+
+  poolInput.value = shift.pool;
+  renderRows();
+})();
+</script>
+</body>
+</html>

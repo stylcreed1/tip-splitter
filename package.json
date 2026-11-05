@@ -1,0 +1,5 @@
+{
+  "name": "tip-splitter",
+  "private": true,
+  "scripts": { "test": "node --test" }
+}
